@@ -9,6 +9,9 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/tendermint/tendermint/libs/log"
+
 )
 
 // Keeper is the model object for the package tokenlock module
@@ -28,22 +31,74 @@ type Keeper struct {
 	codespace sdk.CodespaceType
 }
 
-// func (keeper Keeper) QueryOwnerLocks(ctx sdk.Context, owner sdk.AccAddress) amc { }
 
-func (keeper Keeper) GetLockAmount(ctx sdk.Context, owner sdk.AccAddress, unlockTime time.Duration) (amount sdk.Coins) {
+// Logger returns a module-specific logger.
+func (keeper Keeper) Logger(ctx sdk.Context) log.Logger { return ctx.Logger().With("module", "x/tokenlock") }
+
+func (keeper Keeper) GetOwnerLocks(ctx sdk.Context, owner sdk.AccAddress) (locks []TokenLock) {
+	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixLocks)
+	iterator := store.Iterator(owner, sdk.PrefixEndBytes(owner))
+	defer iterator.Close()
+	for ; iterator.Valid(); iterator.Next() {
+		var lock TokenLock
+
+		keeper.cdc.MustUnmarshalBinaryBare(iterator.Value(), &lock)
+
+		locks = append(locks, lock)
+	}
+	return locks
+}
+
+func (keeper Keeper) GetAllLocks(ctx sdk.Context) (locks []TokenLock) {
+	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixLocks)
+	iterator := store.Iterator(nil, nil)
+	defer iterator.Close()
+	for ; iterator.Valid(); iterator.Next() {
+		var lock TokenLock
+
+		keeper.cdc.MustUnmarshalBinaryBare(iterator.Value(), &lock)
+
+		locks = append(locks, lock)
+	}
+	return locks
+}
+
+
+func (keeper Keeper) GetAllUnlocks(ctx sdk.Context) (unlocks []TokenUnlock) {
+	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixUnlockQueue)
+	iterator := store.Iterator(nil, nil)
+	defer iterator.Close()
+	for ; iterator.Valid(); iterator.Next() {
+		var unlock TokenUnlock
+
+		keeper.cdc.MustUnmarshalBinaryBare(iterator.Value(), &unlock)
+
+		unlocks = append(unlocks, unlock)
+	}
+	return unlocks
+}
+
+func (keeper Keeper) GetLock(ctx sdk.Context, owner sdk.AccAddress, unlockTime time.Duration) (lock TokenLock) {
 	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixLocks)
 	bz := store.Get(KeyLock(owner, unlockTime))
 	if bz == nil {
-		return
+		return TokenLock {
+			Owner: owner,
+			UnlockTime: unlockTime,
+		}
 	}
-	keeper.cdc.MustUnmarshalBinaryBare(bz, &amount)
+	keeper.cdc.MustUnmarshalBinaryBare(bz, &lock)
 	return
 }
 
-func (keeper Keeper) setLockAmount(ctx sdk.Context, owner sdk.AccAddress, unlockTime time.Duration, amount sdk.Coins) {
+func (keeper Keeper) setLock(ctx sdk.Context, lock TokenLock) {
 	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixLocks)
-	bz := keeper.cdc.MustMarshalBinaryBare(newAmount)
-	store.Set(KeyLock(owner, unlockTime), bz)
+	if lock.Amount.IsZero() {
+		store.Delete(KeyLock(lock.Owner, lock.UnlockTime))
+		return
+	}
+	bz := keeper.cdc.MustMarshalBinaryBare(lock.Amount)
+	store.Set(KeyLock(lock.Owner, lock.UnlockTime), bz)
 }
 
 func (keeper Keeper) LockCoins(ctx sdk.Context, owner sdk.AccAddress, unlockTime time.Duration, amount sdk.Coins) sdk.Error {
@@ -51,53 +106,48 @@ func (keeper Keeper) LockCoins(ctx sdk.Context, owner sdk.AccAddress, unlockTime
 	if err != nil {
 		return err
 	}
-	currentAmount := keeper.GetLockAmount(ctx, owner, unlockTime)
-	newAmount := currentAmount.Add(amount)
-	keeper.setLockAmount(ctx, owner, unlockTime, newAmount)
+	lock := keeper.GetLock(ctx, owner, unlockTime)
+	lock.Amount = lock.Amount.Add(amount)
+	keeper.setLock(ctx, lock)
+	return nil
 }
 
 func (keeper Keeper) BeginUnlock(ctx sdk.Context, owner sdk.AccAddress, unlockTime time.Duration, amount sdk.Coins) sdk.Error {
-	currentAmount := keeper.QueryOwnerTimeLock(ctx, owner, unlockTime)
-	newAmount := currentAmount.Sub(amount)
-	if newAmount.IsAnyNegative() {
-		return ErrInsufficientCoins()
+	lock := keeper.GetLock(ctx, owner, unlockTime)
+	newAmount, errBool := lock.Amount.SafeSub(amount)
+	if errBool {
+		return ErrInsufficientCoins(keeper.codespace)
 	}
-	keeper.setLockAmount(ctx, owner, unlockTime, newAmount)
+	lock.Amount = newAmount
+	keeper.setLock(ctx, lock)
 
-	keeper.InsertUnlockQueue(
+	keeper.InsertUnlockQueue(ctx,
 		TokenUnlock{
 			Amount:     amount,
-			UnlockTime: ctx.BlockHeader().Time.Add(unlockTime),
+			CompletionTime: ctx.BlockHeader().Time.Add(unlockTime),
 			Owner:      owner,
 		},
 	)
+	return nil
 }
 
 func (keeper Keeper) FinishUnlock(ctx sdk.Context, unlock TokenUnlock) sdk.Error {
-	if unlock.UnlockTime.After(ctx.BlockHeader().Time) {
+	if unlock.CompletionTime.After(ctx.BlockHeader().Time) {
 		panic("unlocked too soon")
 	}
 
 	keeper.bankKeeper.AddCoins(ctx, unlock.Owner, unlock.Amount)
-	keeper.setLockAmount(ctx, owner, unlockTime, newAmount)
-
-	keeper.InsertUnlockQueue(
-		TokenUnlock{
-			Amount:     amount,
-			UnlockTime: ctx.BlockHeader().Time.Add(unlockTime),
-			Owner:      owner,
-		},
-	)
+	return nil
 }
 
 // Returns an iterator for all the unlocks in the Unlock Queue that expire by endTime
 func (keeper Keeper) UnlockQueueIterator(ctx sdk.Context, endTime time.Time) sdk.Iterator {
 	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixUnlockQueue)
-	return store.Iterator(PrefixUnlockQueue, sdk.PrefixEndBytes(PrefixUnlockQueueTime(endTime)))
+	return store.Iterator(nil, sdk.PrefixEndBytes(PrefixUnlockQueueTime(endTime)))
 }
 
 // Inserts a ProposalID into the active proposal queue at endTime
-func (keeper Keeper) InsertUnlockQueue(ctx sdk.Context, endTime time.Time, unlock TokenUnlock) {
+func (keeper Keeper) InsertUnlockQueue(ctx sdk.Context, unlock TokenUnlock) {
 	store := prefix.NewStore(ctx.KVStore(keeper.storeKey), PrefixUnlockQueue)
 	bz := keeper.cdc.MustMarshalBinaryBare(unlock)
 	store.Set(KeyUnlock(unlock), bz)

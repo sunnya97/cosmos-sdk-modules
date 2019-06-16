@@ -13,8 +13,15 @@ const (
 )
 
 // Tokenlock stores data about a tokenlock
-type TokenUnlock struct {
+type TokenLock struct {
 	Amount     sdk.Coins
-	UnlockTime time.Time
+	UnlockTime time.Duration
 	Owner      sdk.AccAddress
+}
+
+// Tokenlock stores data about a tokenlock
+type TokenUnlock struct {
+	Amount         sdk.Coins
+	CompletionTime time.Time
+	Owner          sdk.AccAddress
 }

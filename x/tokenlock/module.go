@@ -85,7 +85,7 @@ func NewAppModule(keeper Keeper) AppModule {
 }
 
 // RegisterInvariants enforces registering of invariants
-func (AppModule) RegisterInvariants(_ sdk.InvariantRouter) {}
+func (AppModule) RegisterInvariants(_ sdk.InvariantRegistry) {}
 
 // Route defines the key for the route
 func (AppModule) Route() string {
@@ -128,5 +128,5 @@ func (AppModule) BeginBlock(_ sdk.Context, _ abci.RequestBeginBlock) sdk.Tags {
 
 // EndBlock runs at the end of each block
 func (am AppModule) EndBlock(ctx sdk.Context, _ abci.RequestEndBlock) ([]abci.ValidatorUpdate, sdk.Tags) {
-	return sdk.EmptyTags(), EndBlocker(ctx, am.keeper)
+	return nil, EndBlocker(ctx, am.keeper)
 }

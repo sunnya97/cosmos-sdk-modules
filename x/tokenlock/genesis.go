@@ -4,13 +4,15 @@ import sdk "github.com/cosmos/cosmos-sdk/types"
 
 // GenesisState defines genesis data for the module
 type GenesisState struct {
-	Tokenlocks []Tokenlock `json:"tokenlocks"`
+	TokenLocks   []TokenLock   `json:"tokenlocks"`
+	TokenUnlocks []TokenUnlock `json:"tokenunlocks"`
 }
 
 // NewGenesisState creates a new genesis state.
 func NewGenesisState() GenesisState {
 	return GenesisState{
-		Tokenlocks: nil,
+		TokenLocks:   nil,
+		TokenUnlocks: nil,
 	}
 }
 
